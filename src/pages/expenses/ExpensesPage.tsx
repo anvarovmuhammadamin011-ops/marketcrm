@@ -15,6 +15,7 @@ import {
 } from '../../db/repo/expensesRepo'
 import { getOpenShift } from '../../db/repo/salesRepo'
 import { useCurrentUser } from '../../hooks/useAuth'
+import type { ExpenseCategory, Shift } from '../../types'
 
 interface Props {
   userId?: number
@@ -24,10 +25,9 @@ interface Props {
 export default function ExpensesPage({ userId }: Props) {
   const user = useCurrentUser()
   const uid = userId ?? user?.id
-  if (!uid) return null
 
-  const categories = useLiveQuery(() => listExpenseCategories(), [], [])
-  const shift = useLiveQuery(() => getOpenShift(), [], null)
+  const categories = useLiveQuery(() => listExpenseCategories(), [], [] as ExpenseCategory[])
+  const shift = useLiveQuery(() => getOpenShift(), [], null as Shift | null)
 
   // ── Filtrlar ──
   const bugun = toDateInput(Date.now())
@@ -51,77 +51,24 @@ export default function ExpensesPage({ userId }: Props) {
   )
 
   const rows = useLiveQuery(() => listExpenses(filter), [filter], [] as ExpenseRow[])
-
-  // ── Shakl holatlari ──
   const [editing, setEditing] = useState<ExpenseRow | null>(null)
-  const [category, setCategory] = useState(0)
-  const [sana, setSana] = useState(bugun)
-  const [summa, setSumma] = useState('')
-  const [izoh, setIzoh] = useState('')
-  const [kassadan, setKassadan] = useState(false)
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
 
-  // Yangi qo'shish paytida birinchi kategoriya avtomatik tanlansin
-  useEffect(() => {
-    if (!editing && category === 0 && categories.length > 0) setCategory(categories[0].id!)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categories])
+  const categoryStats = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const r of rows) map.set(r.categoryNom, (map.get(r.categoryNom) ?? 0) + r.amount)
+    return [...map.entries()].sort((a, b) => b[1] - a[1])
+  }, [rows])
 
-  function resetForm() {
-    setEditing(null)
-    setCategory(categories[0]?.id ?? 0)
-    setSana(bugun)
-    setSumma('')
-    setIzoh('')
-    setKassadan(false)
-    setError('')
-  }
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    if (busy) return
-    setError('')
-
-    const payload = {
-      categoryId: category,
-      amount: Number(summa),
-      date: fromDateInput(sana),
-      note: izoh.trim() || undefined,
-      fromCash: kassadan,
-      shiftId: kassadan ? (shift?.id ?? null) : null,
-      userId: uid,
-    }
-
-    setBusy(true)
-    try {
-      if (editing) await updateExpense(editing.id!, payload)
-      else await createExpense(payload)
-      resetForm()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Xatolik yuz berdi')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function startEdit(row: ExpenseRow) {
-    setEditing(row)
-    setCategory(row.categoryId)
-    setSana(toDateInput(row.date))
-    setSumma(String(row.amount))
-    setIzoh(row.note ?? '')
-    setKassadan(row.shiftId != null)
-    setError('')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
+  // Sessiya tiklanmagan payt — shaklni ko'rsatmaymiz, lekin hook tartibi buzilmasin
+  if (!uid) return null
+  const me: number = uid
 
   async function handleDelete(row: ExpenseRow) {
     if (!window.confirm(`"${row.categoryNom}" — ${fmtMoney(row.amount)} so'm chiqimi o'chirilsinmi?`))
       return
     try {
-      await deleteExpense(row.id!, uid)
-      if (editing?.id === row.id) resetForm()
+      await deleteExpense(row.id!, me)
+      if (editing?.id === row.id) setEditing(null)
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Xatolik yuz berdi')
     }
@@ -131,12 +78,6 @@ export default function ExpensesPage({ userId }: Props) {
   const jami = rows.reduce((s, r) => s + r.amount, 0)
   const kassaOrqali = rows.filter((r) => r.shiftId != null).reduce((s, r) => s + r.amount, 0)
 
-  const categoryStats = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const r of rows) map.set(r.categoryNom, (map.get(r.categoryNom) ?? 0) + r.amount)
-    return [...map.entries()].sort((a, b) => b[1] - a[1])
-  }, [rows])
-
   return (
     <div>
       <h1 className="mb-4 text-2xl font-bold text-slate-800">Chiqimlar</h1>
@@ -144,91 +85,16 @@ export default function ExpensesPage({ userId }: Props) {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* ── Chap ustun: shakl ── */}
         <div className="space-y-4 lg:col-span-1">
-          <form onSubmit={handleSubmit} className="card p-5">
-            <h2 className="mb-4 text-lg font-bold text-slate-800">
-              {editing ? 'Chiqimni tahrirlash' : 'Yangi chiqim'}
-            </h2>
+          <ExpenseForm
+            categories={categories}
+            shift={shift}
+            editing={editing}
+            userId={me}
+            onEditCancel={() => setEditing(null)}
+            onSaved={() => setEditing(null)}
+          />
 
-            <label className="mb-1 block text-sm font-medium text-slate-600">Kategoriya</label>
-            <select
-              className="fld mb-1"
-              value={category}
-              onChange={(e) => setCategory(Number(e.target.value))}
-            >
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.nom}
-                </option>
-              ))}
-            </select>
-            <NewCategory />
-
-            <label className="mb-1 mt-3 block text-sm font-medium text-slate-600">Sana</label>
-            <input
-              className="fld"
-              type="date"
-              value={sana}
-              onChange={(e) => setSana(e.target.value)}
-            />
-
-            <label className="mb-1 mt-3 block text-sm font-medium text-slate-600">
-              Summa (so'm)
-            </label>
-            <input
-              className="fld text-right text-lg font-bold"
-              type="number"
-              min="0"
-              value={summa}
-              onChange={(e) => setSumma(e.target.value)}
-              placeholder="0"
-            />
-
-            <label className="mb-1 mt-3 block text-sm font-medium text-slate-600">Izoh</label>
-            <input
-              className="fld"
-              value={izoh}
-              onChange={(e) => setIzoh(e.target.value)}
-              placeholder="ixtiyoriy"
-            />
-
-            <label
-              className={`mt-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
-                shift ? 'border-slate-200 bg-slate-50' : 'border-slate-100 bg-slate-50 opacity-60'
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={kassadan}
-                disabled={!shift}
-                onChange={(e) => setKassadan(e.target.checked)}
-              />
-              <span>
-                <b className="text-slate-700">Kassadan naqd yechildi</b>
-                <span className="block text-xs text-slate-500">
-                  {shift
-                    ? "Belgilansa, xarajat smena 'kutilayotgan naqd' hisobidan ayriladi"
-                    : 'Ochiq smena yo\'q — faqat yozuv sifatida kiritiladi'}
-                </span>
-              </span>
-            </label>
-
-            <ErrorBox message={error} />
-
-            <div className="mt-4 flex gap-2">
-              <button type="submit" disabled={busy} className="btn-primary flex-1">
-                {busy ? 'Saqlanmoqda…' : editing ? 'Saqlash' : 'Qo\'shish'}
-              </button>
-              {editing && (
-                <button type="button" className="btn-ghost" onClick={resetForm}>
-                  Bekor
-                </button>
-              )}
-            </div>
-          </form>
-
-          {/* ── Kassadan naqd harakatlari ── */}
-          <CashPanel shiftId={shift?.id} userId={uid} />
+          <CashPanel shiftId={shift?.id} userId={me} />
         </div>
 
         {/* ── O'ng ustun: ro'yxat ── */}
@@ -236,9 +102,7 @@ export default function ExpensesPage({ userId }: Props) {
           {/* Filtrlar */}
           <div className="card flex flex-wrap items-end gap-3 p-4">
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase text-slate-400">
-                Dan
-              </label>
+              <label className="mb-1 block text-xs font-semibold uppercase text-slate-400">Dan</label>
               <input
                 className="fld w-36"
                 type="date"
@@ -365,7 +229,10 @@ export default function ExpensesPage({ userId }: Props) {
                     <td className="px-4 py-2.5 text-right">
                       <button
                         className="btn-ghost !px-2 !py-1 text-xs"
-                        onClick={() => startEdit(r)}
+                        onClick={() => {
+                          setEditing(r)
+                          window.scrollTo({ top: 0, behavior: 'smooth' })
+                        }}
                       >
                         Tahrirlash
                       </button>{' '}
@@ -384,6 +251,163 @@ export default function ExpensesPage({ userId }: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+// ─────────────────────────── SHAKL ───────────────────────────
+
+/** Chiqim qo'shish / tahrirlash shakli */
+function ExpenseForm({
+  categories,
+  shift,
+  editing,
+  userId,
+  onEditCancel,
+  onSaved,
+}: {
+  categories: ExpenseCategory[]
+  shift: Shift | null
+  editing: ExpenseRow | null
+  userId: number
+  onEditCancel: () => void
+  onSaved: () => void
+}) {
+  const bugun = toDateInput(Date.now())
+  const [category, setCategory] = useState(0)
+  const [sana, setSana] = useState(bugun)
+  const [summa, setSumma] = useState('')
+  const [izoh, setIzoh] = useState('')
+  const [kassadan, setKassadan] = useState(false)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  // Tanlangan chiqim yoki kategoriya ro'yxati o'zgarganda shaklni to'ldiramiz
+  useEffect(() => {
+    if (editing) {
+      setCategory(editing.categoryId)
+      setSana(toDateInput(editing.date))
+      setSumma(String(editing.amount))
+      setIzoh(editing.note ?? '')
+      setKassadan(editing.shiftId != null)
+      setError('')
+    } else {
+      setCategory(categories[0]?.id ?? 0)
+      setSana(bugun)
+      setSumma('')
+      setIzoh('')
+      setKassadan(false)
+      setError('')
+    }
+  }, [editing, categories, bugun])
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (busy) return
+    setError('')
+
+    const payload = {
+      categoryId: category,
+      amount: Number(summa),
+      date: fromDateInput(sana),
+      note: izoh.trim() || undefined,
+      fromCash: kassadan,
+      shiftId: kassadan ? (shift?.id ?? null) : null,
+      userId,
+    }
+
+    setBusy(true)
+    try {
+      if (editing) await updateExpense(editing.id!, payload)
+      else await createExpense(payload)
+      onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Xatolik yuz berdi')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="card p-5">
+      <h2 className="mb-4 text-lg font-bold text-slate-800">
+        {editing ? 'Chiqimni tahrirlash' : 'Yangi chiqim'}
+      </h2>
+
+      <label className="mb-1 block text-sm font-medium text-slate-600">Kategoriya</label>
+      <select
+        className="fld mb-1"
+        value={category}
+        onChange={(e) => setCategory(Number(e.target.value))}
+      >
+        {categories.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.nom}
+          </option>
+        ))}
+      </select>
+      <NewCategory />
+
+      <label className="mb-1 mt-3 block text-sm font-medium text-slate-600">Sana</label>
+      <input
+        className="fld"
+        type="date"
+        value={sana}
+        onChange={(e) => setSana(e.target.value)}
+      />
+
+      <label className="mb-1 mt-3 block text-sm font-medium text-slate-600">Summa (so'm)</label>
+      <input
+        className="fld text-right text-lg font-bold"
+        type="number"
+        min="0"
+        value={summa}
+        onChange={(e) => setSumma(e.target.value)}
+        placeholder="0"
+      />
+
+      <label className="mb-1 mt-3 block text-sm font-medium text-slate-600">Izoh</label>
+      <input
+        className="fld"
+        value={izoh}
+        onChange={(e) => setIzoh(e.target.value)}
+        placeholder="ixtiyoriy"
+      />
+
+      <label
+        className={`mt-4 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
+          shift ? 'border-slate-200 bg-slate-50' : 'border-slate-100 bg-slate-50 opacity-60'
+        }`}
+      >
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={kassadan}
+          disabled={!shift}
+          onChange={(e) => setKassadan(e.target.checked)}
+        />
+        <span>
+          <b className="text-slate-700">Kassadan naqd yechildi</b>
+          <span className="block text-xs text-slate-500">
+            {shift
+              ? "Belgilansa, xarajat smena 'kutilayotgan naqd' hisobidan ayriladi"
+              : 'Ochiq smena yo\'q — faqat yozuv sifatida kiritiladi'}
+          </span>
+        </span>
+      </label>
+
+      <ErrorBox message={error} />
+
+      <div className="mt-4 flex gap-2">
+        <button type="submit" disabled={busy} className="btn-primary flex-1">
+          {busy ? 'Saqlanmoqda…' : editing ? 'Saqlash' : 'Qo\'shish'}
+        </button>
+        {editing && (
+          <button type="button" className="btn-ghost" onClick={onEditCancel}>
+            Bekor
+          </button>
+        )}
+      </div>
+    </form>
   )
 }
 
@@ -429,11 +453,7 @@ function NewCategory() {
       <button type="submit" className="btn-primary !py-1.5 text-xs">
         Qo'shish
       </button>
-      <button
-        type="button"
-        className="btn-ghost !py-1.5 text-xs"
-        onClick={() => setOchiq(false)}
-      >
+      <button type="button" className="btn-ghost !py-1.5 text-xs" onClick={() => setOchiq(false)}>
         Bekor
       </button>
       {error && <span className="text-xs text-rose-600">{error}</span>}
@@ -454,14 +474,6 @@ function CashPanel({ shiftId, userId }: { shiftId?: number; userId: number }) {
   const [sabab, setSabab] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-
-  if (!shiftId) {
-    return (
-      <div className="card p-5 text-sm text-slate-400">
-        Naqd harakatlari uchun smena ochiq bo'lishi kerak.
-      </div>
-    )
-  }
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -486,6 +498,14 @@ function CashPanel({ shiftId, userId }: { shiftId?: number; userId: number }) {
 
   const kirish = events.filter((e) => e.type === 'cash_in').reduce((s, e) => s + e.amount, 0)
   const chiqish = events.filter((e) => e.type === 'cash_out').reduce((s, e) => s + e.amount, 0)
+
+  if (!shiftId) {
+    return (
+      <div className="card p-5 text-sm text-slate-400">
+        Naqd harakatlari uchun smena ochiq bo'lishi kerak.
+      </div>
+    )
+  }
 
   return (
     <div className="card p-5">
@@ -533,7 +553,7 @@ function CashPanel({ shiftId, userId }: { shiftId?: number; userId: number }) {
           className="fld"
           value={sabab}
           onChange={(e) => setSabab(e.target.value)}
-          placeholder="Sabab (masalan: tushumga kirim qilish)"
+          placeholder="Sabab (masalan: banka ga o'tkazish)"
         />
 
         <ErrorBox message={error} />

@@ -25,6 +25,15 @@ import {
   openShift,
 } from '../src/db/repo/salesRepo'
 import { createPurchase, createSupplier, getStockMap } from '../src/db/repo/stockRepo'
+import {
+  createExpense,
+  createExpenseCategory,
+  deleteExpense,
+  deleteExpenseCategory,
+  listExpenses,
+  sumExpenses,
+  updateExpense,
+} from '../src/db/repo/expensesRepo'
 
 const natijalar: Array<{ jadval: string; bor: number; kutilgan: number }> = []
 
@@ -197,6 +206,175 @@ async function kassaOqimi() {
   tekshir('kassa: kamomad -500', yopilgan.diff === -500 ? 1 : 0, 1)
 }
 
+/** CHIQIMLAR oqimi: yozuv, kassadan chiqarish, tahrirlash, o'chirish */
+async function chiqimOqimi() {
+  const admin = (await db.users.where('login').equals('admin').first())!
+  const userId = admin.id!
+
+  const ijaralar = (await db.expense_categories.where('nom').equals('Ijara').first())!
+  const kommunal = (await db.expense_categories.where('nom').equals('Kommunal').first())!
+
+  // ── Oddiy yozuv (kassaga tegilmaydi) ──
+  const yozuv = await createExpense({
+    categoryId: ijaralar.id!,
+    amount: 2_000_000,
+    date: Date.now(),
+    note: 'Oktabr ijara',
+    userId,
+  })
+  tekshir('chiqim: yozuv yaratildi', (await db.expenses.get(yozuv))?.amount === 2_000_000 ? 1 : 0, 1)
+
+  // Summa 0 yoki manfiy bo'lmasligi kerak
+  let bloklandi = false
+  try {
+    await createExpense({ categoryId: ijaralar.id!, amount: 0, date: Date.now(), userId })
+  } catch {
+    bloklandi = true
+  }
+  tekshir('chiqim: 0 summa bloklanadi', bloklandi ? 1 : 0, 1)
+
+  // ── Kassadan naqd chiqarish (smena talab qilinadi) ──
+  let smenasizBloklandi = false
+  try {
+    await createExpense({
+      categoryId: kommunal.id!,
+      amount: 50_000,
+      date: Date.now(),
+      userId,
+      fromCash: true,
+    })
+  } catch {
+    smenasizBloklandi = true
+  }
+  tekshir('chiqim: smenasiz kassadan chiqarilmaydi', smenasizBloklandi ? 1 : 0, 1)
+
+  const shiftId = await openShift(100_000, userId)
+  const naqdChiqim = await createExpense({
+    categoryId: kommunal.id!,
+    amount: 50_000,
+    date: Date.now(),
+    note: 'Tok va suv',
+    userId,
+    fromCash: true,
+    shiftId,
+  })
+
+  // Kassadagi pul kutilayotgan naqddan ayrilishi kerak
+  const smena1 = await calcShiftSummary(shiftId)
+  tekshir(
+    'chiqim: kassadan chiqarish hisobga olinadi',
+    smena1.expectedCash === 100_000 - 50_000 ? 1 : 0,
+    1,
+  )
+
+  // cash_events ga bog'langan bo'lishi kerak (tahrirlash/o'chirish uchun)
+  const boghangan = await db.cash_events
+    .where('refType')
+    .equals('expense')
+    .and((e) => e.refId === naqdChiqim)
+    .count()
+  tekshir('chiqim: cash_event bog\'langan', boghangan === 1 ? 1 : 0, 1)
+
+  // ── Tahrirlash: summa o'zgarganda kassadagi ta'sir ham yangilanadi ──
+  await updateExpense(naqdChiqim, {
+    categoryId: kommunal.id!,
+    amount: 70_000,
+    date: Date.now(),
+    userId,
+    fromCash: true,
+    shiftId,
+  })
+  const smena2 = await calcShiftSummary(shiftId)
+  tekshir(
+    'chiqim: tahrirlashda kassa yangilandi',
+    smena2.expectedCash === 100_000 - 70_000 ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'chiqim: tahrirlashda cash_event yangilandi',
+    (await db.cash_events.where('refType').equals('expense').and((e) => e.refId === naqdChiqim).count()) === 1
+      ? 1
+      : 0,
+    1,
+  )
+
+  // ── "Kassadan" belgisini olib tashlash: kassaga ta'sir qolmasligi kerak ──
+  await updateExpense(naqdChiqim, {
+    categoryId: kommunal.id!,
+    amount: 70_000,
+    date: Date.now(),
+    userId,
+    fromCash: false,
+  })
+  const smena3 = await calcShiftSummary(shiftId)
+  tekshir(
+    'chiqim: kassadan olib tashlanganda to\'lanadi',
+    smena3.expectedCash === 100_000 ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'chiqim: cash_event o\'chirildi',
+    (await db.cash_events.where('refType').equals('expense').and((e) => e.refId === naqdChiqim).count()) === 0
+      ? 1
+      : 0,
+    1,
+  )
+
+  // ── Filtrlar va kategoriya nomlari ──
+  const bugun = new Date()
+  bugun.setHours(0, 0, 0, 0)
+  const royxat = await listExpenses({ from: bugun.getTime() })
+  tekshir('chiqim: bugungi filtr ishladi', royxat.length >= 2 ? 1 : 0, 1)
+  tekshir(
+    'chiqim: kategoriya nomi biriktirilgan',
+    royxat.every((r) => r.categoryNom !== '—') ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'chiqim: jami hisoblanadi',
+    (await sumExpenses({ from: bugun.getTime() })) ===
+      royxat.reduce((s, r) => s + r.amount, 0)
+      ? 1
+      : 0,
+    1,
+  )
+  tekshir(
+    'chiqim: kategoriya bo\'yicha filtr',
+    (await listExpenses({ categoryId: kommunal.id! })).every((r) => r.categoryId === kommunal.id)
+      ? 1
+      : 0,
+    1,
+  )
+
+  // ── Kategoriya: takrorlanmasin va ishlatilgani o'chirilmasin ──
+  let dupBloklandi = false
+  try {
+    await createExpenseCategory('Ijara')
+  } catch {
+    dupBloklandi = true
+  }
+  tekshir('chiqim: takror kategoriya bloklanadi', dupBloklandi ? 1 : 0, 1)
+
+  let ochirishBloklandi = false
+  try {
+    await deleteExpenseCategory(ijaralar.id!)
+  } catch {
+    ochirishBloklandi = true
+  }
+  tekshir('chiqim: ishlatilgan kategoriya o\'chirilmaydi', ochirishBloklandi ? 1 : 0, 1)
+
+  const yangi = await createExpenseCategory('Reklama')
+  tekshir('chiqim: yangi kategoriya qo\'shildi', !!yangi ? 1 : 0, 1)
+  await deleteExpenseCategory(yangi)
+  tekshir('chiqim: bo\'sh kategoriya o\'chirildi', (await db.expense_categories.get(yangi)) === undefined ? 1 : 0, 1)
+
+  // ── Chiqimni o'chirish ──
+  await deleteExpense(yozuv, userId)
+  tekshir('chiqim: o\'chirildi', (await db.expenses.get(yozuv)) === undefined ? 1 : 0, 1)
+
+  await closeShift(100_000, userId)
+}
+
 async function asosiy() {
   // ── 1. Baza ochiladi va seed ishlaydi ──
   await runSeed()
@@ -232,6 +410,9 @@ async function asosiy() {
 
   // ── 6. Kassa oqimi: smena → savdo → bekor → smena yopish ──
   await kassaOqimi()
+
+  // ── 7. Chiqimlar oqimi ──
+  await chiqimOqimi()
 
   // ── Natija ──
   let xatolar = 0

@@ -8,6 +8,7 @@ import LoginPage from './pages/auth/LoginPage'
 import PlaceholderPage from './pages/PlaceholderPage'
 import ProductsPage from './pages/products/ProductsPage'
 import KassaPage from './pages/pos/KassaPage'
+import ExpensesPage from './pages/expenses/ExpensesPage'
 import WarehousePage from './pages/warehouse/WarehousePage'
 
 /**
@@ -89,21 +90,7 @@ export default function App() {
             <Route path="/ombor" element={<WarehousePage />} />
 
             {/* Bosqich 5 — Chiqimlar */}
-            <Route
-              path="/chiqimlar"
-              element={
-                <PlaceholderPage
-                  title="Chiqimlar"
-                  bosqich={5}
-                  description="Ijara, ish haqi, kommunal va boshqa xarajatlar shu yerda qayd etiladi."
-                  items={[
-                    "6 ta kategoriya (ijara, ish haqi, kommunal, transport, soliq, boshqa)",
-                    "Sana, summa, izoh bilan kiritish",
-                    "Chiqimlar tahrirlash va o'chirish (faqat egasi)",
-                  ]}
-                />
-              }
-            />
+            <Route path="/chiqimlar" element={<ExpensesPage />} />
 
             {/* Bosqich 6 — Hisobotlar */}
             <Route

@@ -80,8 +80,11 @@ export async function calcShiftSummary(shiftId: number): Promise<ShiftSummary> {
   const expenses = await db.expenses.where('shiftId').equals(shiftId).toArray()
   const expenseSum = expenses.reduce((s, e) => s + e.amount, 0)
 
-  const expectedCash =
-    shift.openingCash + cashSales - cashReturns + cashIn - cashOut - expenseSum
+  // `cash_events` — naqd harakatlarining YAGONA manbai. Smenaga bog'langan
+  // chiqimlar o'zlarining cash_out yozuvi bilan hisobga olingan, shuning uchun
+  // ularni ikkinchi marta ayirish kassani noto'g'ri ko'rsatadi.
+  // Faqat `expenses` — hujjat/hisobot uchun (foyda hisobida ishlatiladi).
+  const expectedCash = shift.openingCash + cashSales - cashReturns + cashIn - cashOut
 
   const completedSales = sales.filter((s) => s.status === 'completed')
   const salesTotal = completedSales.reduce((s, x) => s + x.total, 0)
