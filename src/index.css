@@ -1,0 +1,146 @@
+/* Tailwind CSS v4 — CSS-first sozlash (tailwind.config.js shart emas) */
+@import 'tailwindcss';
+
+/* Ilova uchun asosiy stillar */
+@layer base {
+  html {
+    /* Kassada har soniya muhim — standart shrift o'rniga tez o'qiladigan shrift */
+    font-family:
+      'Segoe UI',
+      system-ui,
+      -apple-system,
+      Roboto,
+      'Helvetica Neue',
+      Arial,
+      sans-serif;
+    /* Raqamlarni teng qilib chiqarish (jadvallar uchun) */
+    font-variant-numeric: tabular-nums;
+  }
+
+  body {
+    @apply bg-slate-100 text-slate-800 antialiased;
+    margin: 0;
+    min-height: 100vh;
+  }
+
+  /* Kassir uchun qulay: katta raqamlar va tugmalar */
+  button {
+    cursor: pointer;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: inherit;
+  }
+}
+
+@layer components {
+  /* Standart maydon usuli — barcha forma bir xil ko'rinishda bo'lishi uchun */
+  .fld {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm
+           outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20
+           disabled:bg-slate-100 disabled:text-slate-400;
+  }
+
+  /* Asosiy tugmalar (har biri mustaqil — @apply orqali klass uzatish xavfli) */
+  .btn-primary,
+  .btn-ghost,
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm
+           font-semibold transition active:scale-[0.98] disabled:cursor-not-allowed
+           disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-teal-700 text-white hover:bg-teal-800;
+  }
+  .btn-ghost {
+    @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+  }
+  .btn-danger {
+    @apply bg-rose-600 text-white hover:bg-rose-700;
+  }
+
+  /* Kartochka (panel) */
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ETIKETKA CHOP ETISH
+   Ekranda yashiriladi, faqat Chop etish (Ctrl+P) paytida chiqadi
+   ───────────────────────────────────────────────────────────── */
+.print-area {
+  display: none;
+}
+
+.labels-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4mm;
+}
+
+.label-box {
+  width: 50mm;
+  padding: 2mm;
+  border: 1px dashed #94a3b8;
+  background: #fff;
+  text-align: center;
+  page-break-inside: avoid;
+}
+
+.label-name {
+  font-size: 9pt;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0f172a;
+}
+
+.label-price {
+  font-size: 12pt;
+  font-weight: 700;
+  margin-bottom: 1mm;
+}
+
+.label-barcode {
+  width: 100%;
+  height: 13mm;
+}
+
+.label-qr {
+  width: 24mm;
+  height: 24mm;
+  margin: 0 auto;
+}
+
+.label-error {
+  color: #e11d48;
+  font-size: 8pt;
+  padding: 2mm 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible !important;
+  }
+  .print-area {
+    display: block !important;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 6mm;
+    background: #fff;
+  }
+  .label-box {
+    border-style: solid;
+    border-color: #cbd5e1;
+  }
+}
