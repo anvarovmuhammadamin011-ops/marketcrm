@@ -35,6 +35,17 @@ import {
   updateExpense,
 } from '../src/db/repo/expensesRepo'
 
+import {
+  cashierStats,
+  categoryStats,
+  dailySeries,
+  presetPeriod,
+  productStats,
+  profitSummary,
+  shiftStats,
+  stockValue,
+} from '../src/db/repo/reportsRepo'
+
 const natijalar: Array<{ jadval: string; bor: number; kutilgan: number }> = []
 
 function tekshir(jadval: string, bor: number, kutilgan: number) {
@@ -375,6 +386,185 @@ async function chiqimOqimi() {
   await closeShift(100_000, userId)
 }
 
+/**
+ * HISOBOTLAR oqimi — ReportsPage chaqiradigan repo funksiyalari.
+ * Ma'lum raqamlar bilan foyda, TOP mahsulot, kassir va ombor qiymati tekshiriladi.
+ */
+async function hisobotOqimi() {
+  const admin = (await db.users.where('login').equals('admin').first())!
+  const userId = admin.id!
+
+  // Coca-Cola — kassa testida ishlatilmagan mahsulot (uning savdolari aralashmasin)
+  const dona = (await db.products.where('barcode').equals('4780000000011').first())!
+  const TANNARX = 4000
+  const BOSH = 200_000
+
+  // ── Ma'lumotni tozalash: chiqimlardan boshlaymiz (aniq summa tekshirish uchun) ──
+  await db.expenses.clear()
+  // Avvalgi testlardan qolgan savdo va smenalarni ham ko'ramiz ( chalkashmasin)
+  const oldSaves = (await db.sales.toArray()).filter((x) => x.status === 'completed')
+
+  // Yetkazib beruvchi + 10 dona kirim
+  const yetkazibBeruvchi = await createSupplier({ nom: 'Hisobot Yetkazib Beruvchi' })
+  await createPurchase({
+    supplierId: yetkazibBeruvchi,
+    date: Date.now(),
+    lines: [{ productId: dona.id!, qty: 10, costPrice: TANNARX }],
+    paid: 40_000,
+    userId,
+  })
+  const kirimQoldiq = (await getStockMap([dona.id!])).get(dona.id!) ?? 0
+
+  const shiftId = await openShift(BOSH, userId)
+
+  // 1-savdo: 2 dona × 5000 = 10 000 (tannarx 8 000)
+  await commitSale({
+    lines: [{ productId: dona.id!, qty: 2, unitPrice: 5000 }],
+    discount: 0,
+    payments: [{ method: 'cash', amount: 10_000 }],
+    userId,
+    shiftId,
+  })
+  // 2-savdo: 1 dona × 6000 = 6 000 (tannarx 4 000)
+  await commitSale({
+    lines: [{ productId: dona.id!, qty: 1, unitPrice: 6000 }],
+    discount: 0,
+    payments: [{ method: 'cash', amount: 6_000 }],
+    userId,
+    shiftId,
+  })
+  // Bekor qilingan chek hisobotga KIRMASLIGI kerak (2 dona)
+  const bekor = await commitSale({
+    lines: [{ productId: dona.id!, qty: 2, unitPrice: 5000 }],
+    discount: 0,
+    payments: [{ method: 'cash', amount: 10_000 }],
+    userId,
+    shiftId,
+  })
+  await cancelSale(bekor.saleId, userId, 'void')
+
+  // Chiqim: 3 000 so'm (bugungi sanada)
+  const reklama = (await db.expense_categories.toArray())[0]
+  await createExpense({
+    categoryId: reklama.id!,
+    amount: 3_000,
+    date: Date.now(),
+    note: 'hisobot testi',
+    fromCash: false,
+    userId,
+  })
+
+  const bugun = presetPeriod('today')
+  tekshir(
+    'hisobot: "bugun" davri bugunni qamraydi',
+    bugun.from <= Date.now() && bugun.to >= Date.now() ? 1 : 0,
+    1,
+  )
+
+  // ── Mening mahsulotim bo'yicha ANIQ raqamlar ──
+  // tushum 16 000 · tannarx 12 000 · yalpi foyda 4 000 · 3 dona
+  const oqimlar = await productStats(bugun, { sort: 'total' })
+  const mening = oqimlar.find((x) => x.productId === dona.id!)!
+  tekshir('hisobot: mahsulot kesimida topildi', !!mening ? 1 : 0, 1)
+  tekshir('hisobot: mahsulot soni (3 dona)', mening?.qty === 3 ? 1 : 0, 1)
+  tekshir('hisobot: mahsulot tushumi (16 000)', mening?.total === 16_000 ? 1 : 0, 1)
+  tekshir('hisobot: mahsulot foydasi (4 000)', mening?.profit === 4_000 ? 1 : 0, 1)
+  tekshir('hisobot: kategoriya nomi bor', mening?.categoryName !== '—' ? 1 : 0, 1)
+  tekshir(
+    'hisobot: bekor chek mahsulotga qo\'shilmaydi',
+    (oqimlar.find((x) => x.productId === dona.id!)?.qty ?? 0) === 3 ? 1 : 0,
+    1,
+  )
+
+  // ── Umumiy foyda: mening savdolarim + avvalgi testlarning savdolari ──
+  const s = await profitSummary(bugun)
+  const oldTotal = oldSaves.reduce((a, x) => a + x.total, 0)
+  tekshir('hisobot: jami tushum', s.salesTotal === oldTotal + 16_000 ? 1 : 0, 1)
+  tekshir('hisobot: cheklar soni', s.salesCount === oldSaves.length + 2 ? 1 : 0, 1)
+  tekshir('hisobot: chiqimlar (faqat 3 000)', s.expensesTotal === 3_000 ? 1 : 0, 1)
+  tekshir(
+    'hisobot: yalpi foyda = tushum − tannarx',
+    s.grossProfit === s.salesTotal - s.costTotal ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'hisobot: sof foyda = yalpi − chiqim',
+    s.netProfit === s.grossProfit - s.expensesTotal ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'hisobot: o\'rtacha chek',
+    s.avgCheck === Math.round(s.salesTotal / s.salesCount) ? 1 : 0,
+    1,
+  )
+  tekshir('hisobot: naqd = umumiy tushum', s.cashSales === s.salesTotal ? 1 : 0, 1)
+  tekshir('hisobot: karta tushum 0', s.cardSales === 0 ? 1 : 0, 1)
+  tekshir('hisobot: bekor cheklar sanaladi', s.voidCount >= 1 ? 1 : 0, 1)
+
+  // ── Kunlik qator: faqat bugungi kun ──
+  const days = await dailySeries(bugun)
+  tekshir('hisobot: kunlik qator bitta kun', days.length === 1 ? 1 : 0, 1)
+  tekshir('hisobot: kunlik tushum = umumiy', days[0]?.salesTotal === s.salesTotal ? 1 : 0, 1)
+  tekshir('hisobot: kunlik chiqim = 3 000', days[0]?.expensesTotal === 3_000 ? 1 : 0, 1)
+
+  // ── Kategoriya ulushi: jami 100% ──
+  const cats = await categoryStats(bugun)
+  tekshir(
+    'hisobot: kategoriyalar ulushi 100%',
+    cats.reduce((a, c) => a + c.ulush, 0) === 100 ? 1 : 0,
+    1,
+  )
+
+  // ── Kassir kesimida ──
+  const kassir = await cashierStats(bugun)
+  tekshir('hisobot: kassir ulushi 100%', kassir.reduce((a, c) => a + c.ulush, 0) === 100 ? 1 : 0, 1)
+  tekshir(
+    'hisobot: kassir tushumi = umumiy tushum',
+    kassir.reduce((a, c) => a + c.salesTotal, 0) === s.salesTotal ? 1 : 0,
+    1,
+  )
+
+  // ── Smena natijasi: kutilgan naqd faqat YOPILGANDA hisoblanadi ──
+  const ochiq = (await shiftStats(bugun))[0]
+  tekshir('hisobot: ochiq smena hali hisoblanmagan', ochiq?.expectedCash === 0 ? 1 : 0, 1)
+  tekshir('hisobot: smena tushumi 16 000', ochiq?.salesTotal === 16_000 ? 1 : 0, 1)
+  tekshir('hisobot: smena hali ochiq', ochiq?.status === 'open' ? 1 : 0, 1)
+
+  await closeShift(BOSH + 16_000, userId)
+
+  const yopiq = (await shiftStats(bugun))[0]
+  tekshir('hisobot: smena kutilgan naqd', yopiq?.expectedCash === BOSH + 16_000 ? 1 : 0, 1)
+  tekshir('hisobot: smena yopiq', yopiq?.status === 'closed' ? 1 : 0, 1)
+  tekshir('hisobot: smena farqi 0', yopiq?.diff === 0 ? 1 : 0, 1)
+
+  // ── Ombor qiymati: qoldiq 10 − 3 = 7 dona × 4000 = 28 000 ──
+  const ombor = await stockValue()
+  const qoldiq = (await getStockMap([dona.id!])).get(dona.id!) ?? 0
+  tekshir('hisobot: qoldiq 7 dona', Math.abs(qoldiq - (kirimQoldiq - 3)) < 0.001 ? 1 : 0, 1)
+  tekshir(
+    'hisobot: ombor tannarx qiymati',
+    (await stockValue()).costValue >= 7 * TANNARX ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'hisobot: ombor foydasi retail−cost',
+    ombor.expectedProfit === ombor.retailValue - ombor.costValue ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'hisobot: ombor qiymati mahsulotlar ro\'yxatida',
+    ombor.topValue.some((t) => t.nom === dona.nom && Math.abs(t.value - qoldiq * TANNARX) < 0.01)
+      ? 1
+      : 0,
+    1,
+  )
+
+  // ── Davr chegarasi: kechagi kun hisobotga kirmaydi ──
+  const kecha = await profitSummary({ from: bugun.from - 86400000, to: bugun.from - 1 })
+  tekshir('hisobot: kecha hisobga kirmaydi', kecha.salesCount === 0 ? 1 : 0, 1)
+  tekshir('hisobot: kechagi chiqimlar yo\'q', kecha.expensesTotal === 0 ? 1 : 0, 1)
+}
+
 async function asosiy() {
   // ── 1. Baza ochiladi va seed ishlaydi ──
   await runSeed()
@@ -413,6 +603,9 @@ async function asosiy() {
 
   // ── 7. Chiqimlar oqimi ──
   await chiqimOqimi()
+
+  // ── 8. Hisobotlar oqimi ──
+  await hisobotOqimi()
 
   // ── Natija ──
   let xatolar = 0

@@ -9,6 +9,7 @@ import PlaceholderPage from './pages/PlaceholderPage'
 import ProductsPage from './pages/products/ProductsPage'
 import KassaPage from './pages/pos/KassaPage'
 import ExpensesPage from './pages/expenses/ExpensesPage'
+import ReportsPage from './pages/reports/ReportsPage'
 import WarehousePage from './pages/warehouse/WarehousePage'
 
 /**
@@ -93,23 +94,7 @@ export default function App() {
             <Route path="/chiqimlar" element={<ExpensesPage />} />
 
             {/* Bosqich 6 — Hisobotlar */}
-            <Route
-              path="/hisobotlar"
-              element={
-                <PlaceholderPage
-                  title="Foyda va hisobotlar"
-                  bosqich={6}
-                  description="Tushum, tannarx, sof foyda va TOP mahsulotlar shu yerda ko'rsatiladi."
-                  items={[
-                    "Kunlik / haftalik / oylik: tushum, tannarx, yalpi va sof foyda",
-                    "Eng ko'p va eng kam sotilgan mahsulotlar",
-                    "Ombordagi tovarning umumiy qiymati",
-                    "Kassir bo'yicha hisobot",
-                    "Excel / PDF eksport",
-                  ]}
-                />
-              }
-            />
+            <Route path="/hisobotlar" element={<ReportsPage />} />
 
             {/* Bosqich 7 — Foydalanuvchilar */}
             <Route

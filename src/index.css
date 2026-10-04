@@ -143,4 +143,18 @@
     border-style: solid;
     border-color: #cbd5e1;
   }
+
+  /* Hisobot chop etilganda kartalar va qatorlar bo'lib ketmasin */
+  @page {
+    margin: 10mm;
+  }
+  .print-area .card,
+  .print-area table {
+    break-inside: avoid;
+    box-shadow: none;
+    border: 1px solid #e2e8f0;
+  }
+  .print-area tr {
+    break-inside: avoid;
+  }
 }
