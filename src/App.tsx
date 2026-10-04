@@ -2,14 +2,16 @@ import { useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import RequireAuth from './components/RequireAuth'
+import RequireRole from './components/RequireRole'
 import { runSeed } from './db/seed'
 import { restoreSession } from './stores/authStore'
 import LoginPage from './pages/auth/LoginPage'
-import PlaceholderPage from './pages/PlaceholderPage'
 import ProductsPage from './pages/products/ProductsPage'
 import KassaPage from './pages/pos/KassaPage'
 import ExpensesPage from './pages/expenses/ExpensesPage'
 import ReportsPage from './pages/reports/ReportsPage'
+import SettingsPage from './pages/settings/SettingsPage'
+import UsersPage from './pages/users/UsersPage'
 import WarehousePage from './pages/warehouse/WarehousePage'
 
 /**
@@ -84,52 +86,26 @@ export default function App() {
             {/* Bosqich 4 — Kassa */}
             <Route path="/kassa" element={<KassaPage />} />
 
-            {/* Bosqich 2 — Mahsulotlar */}
-            <Route path="/mahsulotlar" element={<ProductsPage />} />
+{/* Bosqich 2–6 — faqat egasi */}
+            <Route element={<RequireRole roles={['owner']} />}>
+              {/* Bosqich 2 — Mahsulotlar */}
+              <Route path="/mahsulotlar" element={<ProductsPage />} />
 
-            {/* Bosqich 3 — Ombor */}
-            <Route path="/ombor" element={<WarehousePage />} />
+              {/* Bosqich 3 — Ombor */}
+              <Route path="/ombor" element={<WarehousePage />} />
 
-            {/* Bosqich 5 — Chiqimlar */}
-            <Route path="/chiqimlar" element={<ExpensesPage />} />
+              {/* Bosqich 5 — Chiqimlar */}
+              <Route path="/chiqimlar" element={<ExpensesPage />} />
 
-            {/* Bosqich 6 — Hisobotlar */}
-            <Route path="/hisobotlar" element={<ReportsPage />} />
+              {/* Bosqich 6 — Hisobotlar */}
+              <Route path="/hisabotlar" element={<ReportsPage />} />
 
-            {/* Bosqich 7 — Foydalanuvchilar */}
-            <Route
-              path="/foydalanuvchilar"
-              element={
-                <PlaceholderPage
-                  title="Foydalanuvchilar va ruxsatlar"
-                  bosqich={7}
-                  description="Kassir qo'shish, parol o'zgartirish va harakatlar jurnali shu yerda bo'ladi."
-                  items={[
-                    "Rollar: egasi (hammasi) va kassir (faqat sotuv)",
-                    "Login / parol bilan kirish",
-                    "Kim qachon nima qilgani — audit jurnali",
-                  ]}
-                />
-              }
-            />
+              {/* Bosqich 7 — Foydalanuvchilar va audit jurnali */}
+              <Route path="/foydalanuvchilar" element={<UsersPage />} />
 
-            {/* Bosqich 7 — Sozlamalar */}
-            <Route
-              path="/sozlamalar"
-              element={
-                <PlaceholderPage
-                  title="Sozlamalar"
-                  bosqich={7}
-                  description="Do'kon ma'lumotlari, egasi parolini o'zgartirish va zaxira nusxa shu yerda bo'ladi."
-                  items={[
-                    "Do'kon nomi, manzil, telefon",
-                    "Kam qoldiq ogohlantirish foizi",
-                    "Zaxira nusxa: JSON export / import",
-                    "Oxirgi zaxira vaqti eslatmasi",
-                  ]}
-                />
-              }
-            />
+              {/* Bosqich 7 — Sozlamalar va zaxira nusxa */}
+              <Route path="/sozlamalar" element={<SettingsPage />} />
+            </Route>
           </Route>
         </Route>
 

@@ -46,6 +46,27 @@ import {
   stockValue,
 } from '../src/db/repo/reportsRepo'
 
+import {
+  activeOwnerCount,
+  changePassword,
+  createUser,
+  listUsers,
+  setPassword,
+  setUserActive,
+  updateUser,
+} from '../src/db/repo/usersRepo'
+import {
+  backupAgeText,
+  exportBackup,
+  getSetting,
+  getSettings,
+  importBackup,
+  lowStockPercent,
+  setSettings,
+} from '../src/db/repo/settingsRepo'
+import { verifyPassword } from '../src/db/crypto'
+import { login } from '../src/hooks/useAuth'
+
 const natijalar: Array<{ jadval: string; bor: number; kutilgan: number }> = []
 
 function tekshir(jadval: string, bor: number, kutilgan: number) {
@@ -565,6 +586,185 @@ async function hisobotOqimi() {
   tekshir('hisobot: kechagi chiqimlar yo\'q', kecha.expensesTotal === 0 ? 1 : 0, 1)
 }
 
+/**
+ * FOYDALANUVCHILAR oqimi — ro'ylar, parol, bloklash va xavfsizlik qoidalari.
+ */
+async function foydalanuvchiOqimi() {
+  const admin = (await db.users.where('login').equals('admin').first())!
+  const ownerId = admin.id!
+
+  // ── Yangi kassir ──
+  const kassirId = await createUser(
+    { login: 'kassir1', password: '1234', fullName: 'Kassir Ali', role: 'cashier' },
+    ownerId,
+  )
+  tekshir('foydalanuvchi: kassir qo\'shildi', kassirId > 0 ? 1 : 0, 1)
+
+  const royxat = await listUsers()
+  tekshir('foydalanuvchi: ro\'yxatda bor', royxat.some((u) => u.id === kassirId) ? 1 : 0, 1)
+  tekshir('foydalanuvchi: egasi birinchi', royxat[0].role === 'owner' ? 1 : 0, 1)
+
+  // Parol hash bilan saqlanadi (ochiq matn emas)
+  const kassir = (await db.users.get(kassirId))!
+  tekshir('foydalanuvchi: parol hashlangan', kassir.passwordHash.length === 64 ? 1 : 0, 1)
+  tekshir('foydalanuvchi: parol saqlanmagan', kassir.passwordHash !== '1234' ? 1 : 0, 1)
+  tekshir(
+    'foydalanuvchi: parol to\'g\'ri tekshiriladi',
+    (await verifyPassword('1234', kassir.passwordHash, kassir.salt)) ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'foydalanuvchi: noto\'g\'ri parol rad etiladi',
+    (await verifyPassword('9999', kassir.passwordHash, kassir.salt)) ? 0 : 1,
+    1,
+  )
+
+  // ── Tizimga kirish ──
+  tekshir('foydalanuvchi: login ishlaydi', (await login('kassir1', '1234')).ok ? 1 : 0, 1)
+  tekshir('foydalanuvchi: noto\'g\'ri parol', (await login('kassir1', 'nope')).ok ? 0 : 1, 1)
+  tekshir('foydalanuvchi: noma\'lum login', (await login('yoquser', '1234')).ok ? 0 : 1, 1)
+  // Katta-kichik harf e'tiborsiz
+  tekshir('foydalanuvchi: login kichik harfda', (await login('KASSIR1', '1234')).ok ? 1 : 0, 1)
+
+  // ── Takrorlanmagan login ──
+  let dupBloklandi = false
+  try {
+    await createUser({ login: 'kassir1', password: '1234', fullName: 'Nomi', role: 'cashier' }, ownerId)
+  } catch {
+    dupBloklandi = true
+  }
+  tekshir('foydalanuvchi: takror login bloklanadi', dupBloklandi ? 1 : 0, 1)
+
+  // ── Xavfsizlik: oxirgi egasi o'zgartirilmaydi ──
+  tekshir('foydalanuvchi: faol egasi 1', (await activeOwnerCount()) === 1 ? 1 : 0, 1)
+  let oxirgiEgasiBloklandi = false
+  try {
+    await setUserActive(ownerId, false, ownerId)
+  } catch {
+    oxirgiEgasiBloklandi = true
+  }
+  tekshir('foydalanuvchi: oxirgi egasi bloklanmaydi', oxirgiEgasiBloklandi ? 1 : 0, 1)
+
+  let rolBloklandi = false
+  try {
+    await updateUser(ownerId, { fullName: admin.fullName, role: 'cashier', isActive: true }, ownerId)
+  } catch {
+    rolBloklandi = true
+  }
+  tekshir('foydalanuvchi: oxirgi egasi kassirga aylantirilmaydi', rolBloklandi ? 1 : 0, 1)
+
+  // ── Parolni o'zgartirish ──
+  // O'zgartirish: eski parol majburiy (faqat o'zi uchun)
+  let eskiParolNotogri = false
+  try {
+    await changePassword(kassirId, 'noto', '5678', kassirId)
+  } catch {
+    eskiParolNotogri = true
+  }
+  tekshir('foydalanuvchi: eski parol tekshiriladi', eskiParolNotogri ? 1 : 0, 1)
+
+  await changePassword(kassirId, '1234', '5678', kassirId)
+  tekshir('foydalanuvchi: yangi parol bilan kirish', (await login('kassir1', '5678')).ok ? 1 : 0, 1)
+  tekshir('foydalanuvchi: eski parol ishlamaydi', (await login('kassir1', '1234')).ok ? 0 : 1, 1)
+
+  // Egasi tayinlaydi: eski parolsiz
+  await setPassword(kassirId, 'abcd', ownerId)
+  tekshir('foydalanuvchi: parol tayinlash', (await login('kassir1', 'abcd')).ok ? 1 : 0, 1)
+
+  // ── Bloklash ──
+  await setUserActive(kassirId, false, ownerId)
+  tekshir('foydalanuvchi: bloklangan kirmaydi', (await login('kassir1', 'abcd')).ok ? 0 : 1, 1)
+  await setUserActive(kassirId, true, ownerId)
+  tekshir('foydalanuvchi: blokdan chiqsa kirdi', (await login('kassir1', 'abcd')).ok ? 1 : 0, 1)
+
+  // ── Rolni o'zgartirish ──
+  await updateUser(kassirId, { fullName: 'Kassir A.', role: 'owner', isActive: true }, ownerId)
+  tekshir('foydalanuvchi: rol o\'zgartirildi', (await db.users.get(kassirId))?.role === 'owner' ? 1 : 0, 1)
+  tekshir('foydalanuvchi: faol egasi 2', (await activeOwnerCount()) === 2 ? 1 : 0, 1)
+
+  // Endi egasi bloklanishi mumkin (kassir ham egasi bo'ldi)
+  await setUserActive(ownerId, false, kassirId)
+  tekshir('foydalanuvchi: ikkinchi egasi blokladi', (await db.users.get(ownerId))?.isActive === false ? 1 : 0, 1)
+  await setUserActive(ownerId, true, kassirId)
+}
+
+/**
+ * SOZLAMALAR va ZAXIRA oqimi.
+ */
+async function sozlamalarOqimi() {
+  const admin = (await db.users.where('login').equals('admin').first())!
+  const ownerId = admin.id!
+
+  // ── O'qish / yozish ──
+  const barchasi = await getSettings()
+  tekshir('sozlama: standart kalitlar bor', barchasi.shop_name.length > 0 ? 1 : 0, 1)
+
+  await setSettings({ shop_name: 'Test Do\'kon', phone: '+998900000000', low_stock_percent: '30' })
+  tekshir('sozlama: nom saqlandi', (await getSetting('shop_name')) === "Test Do'kon" ? 1 : 0, 1)
+  tekshir('sozlama: telefon saqlandi', (await getSetting('phone')) === '+998900000000' ? 1 : 0, 1)
+  tekshir('sozlama: faqat o\'zgaruvchi qiymat', (await getSettings()).shop_name === "Test Do'kon" ? 1 : 0, 1)
+
+  // ── Kam qoldiq foizi ──
+  tekshir('sozlama: foiz 30', lowStockPercent('30') === 30 ? 1 : 0, 1)
+  tekshir('sozlama: foiz chegarasi 100', lowStockPercent('300') === 100 ? 1 : 0, 1)
+  tekshir('sozlama: noto\'g\'ri foiz → standart', lowStockPercent('abc') === 20 ? 1 : 0, 1)
+
+  // ── Zaxira yoshi ──
+  tekshir('sozlama: zaxira yo\'q → ogohlantirish', backupAgeText('').ogohlantirish ? 1 : 0, 1)
+  tekshir('sozlama: bugungi zaxira', backupAgeText(String(Date.now())).oghlantirish ? 0 : 1, 1)
+  tekshir(
+    'sozlama: 10 kunlik zaxira ogohlantiradi',
+    backupAgeText(String(Date.now() - 10 * 86400000)).ogohlantirish ? 1 : 0,
+    1,
+  )
+
+  // ── Zaxira fayl (eksport) ──
+  const zaxira = await exportBackup()
+  tekshir('zaxira: ilova nomi', zaxira.app === 'dokon-crm' ? 1 : 0, 1)
+  tekshir('zaxira: jadvallar bo\'sh emas', Object.keys(zaxira.tables).length > 20 ? 1 : 0, 1)
+  tekshir('zaxira: mahsulotlar kiritilgan', (zaxira.tables.products?.length ?? 0) === 7 ? 1 : 0, 1)
+  tekshir('zaxira: foydalanuvchilar kiritilgan', (zaxira.tables.users?.length ?? 0) >= 2 ? 1 : 0, 1)
+
+  // ── Noto'g'ri fayllar rad etiladi ──
+  tekshir('zaxira: boshqa dastur fayli', (await importBackup({ app: 'boshqa' }, ownerId)).ok ? 0 : 1, 1)
+  tekshir('zaxira: bo\'sh obyekt', (await importBackup(null, ownerId)).ok ? 0 : 1, 1)
+  tekshir(
+    'zaxira: foydalanuvchisiz fayl',
+    (await importBackup({ app: 'dokon-crm', version: 1, tables: {} }, ownerId)).ok ? 0 : 1,
+    1,
+  )
+  tekshir(
+    'zaxira: kelajak versiyasi',
+    (await importBackup({ app: 'dokon-crm', version: 99, tables: zaxira.tables }, ownerId)).ok ? 0 : 1,
+    1,
+  )
+  tekshir('zaxira: rad etilgandan keyin bazaga tegilmedi', (await db.products.count()) === 7 ? 1 : 0, 1)
+
+  // ── Import (tiklash) ──
+  await db.products.put({
+    nom: 'Sinov mahsuloti',
+    barcode: 'TEST-999',
+    categoryId: 1,
+    unit: 'dona',
+    qty: 0,
+    costPrice: 1000,
+    salePrice: 1500,
+    minQty: 0,
+    isActive: true,
+    trackBatch: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+  tekshir('zaxira: sinov mahsuloti qo\'shildi', (await db.products.count()) === 8 ? 1 : 0, 1)
+
+  const tiklash = await importBackup(zaxira, ownerId)
+  tekshir('zaxira: import muvaffaqiyatli', tiklash.ok ? 1 : 0, 1)
+  tekshir('zaxira: mahsulotlar soni tiklandi', (await db.products.count()) === 7 ? 1 : 0, 1)
+  tekshir('zaxira: sinov mahsuloti yo\'qoldi', (await db.products.where('barcode').equals('TEST-999').first()) === undefined ? 1 : 0, 1)
+  tekshir('zaxira: sozlamalar tiklandi', (await getSetting('shop_name')) === "Test Do'kon" ? 1 : 0, 1)
+  tekshir('zaxira: foydalanuvchilar tiklandi', (await db.users.count()) >= 2 ? 1 : 0, 1)
+}
+
 async function asosiy() {
   // ── 1. Baza ochiladi va seed ishlaydi ──
   await runSeed()
@@ -606,6 +806,12 @@ async function asosiy() {
 
   // ── 8. Hisobotlar oqimi ──
   await hisobotOqimi()
+
+  // ── 9. Foydalanuvchilar va ruxsatlar ──
+  await foydalanuvchiOqimi()
+
+  // ── 10. Sozlamalar va zaxira nusxa ──
+  await sozlamalarOqimi()
 
   // ── Natija ──
   let xatolar = 0
