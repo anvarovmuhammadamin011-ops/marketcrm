@@ -189,11 +189,21 @@ export interface PurchaseInput {
   paid: number
   userId: number
   note?: string
+  /** To'lov turi: naqd yoki karta (boshqa usulda to'lanmagan bo'lsa) */
+  payMethod?: 'cash' | 'card'
+  /** To'lov kassadan naqd berildimi (smenaga bog'lanadi) */
+  paidFromCash?: boolean
+  /** paidFromCash = true bo'lsa, qaysi smena */
+  shiftId?: number | null
 }
 
 /**
  * Tovar kirimini qayd etish.
  * Tranzaksiyada bajariladi: hujjat + qatorlar + ledjer + partiya + WAC tannarx.
+ *
+ * To'lov (paid) alohida `purchase_payments` yozuvi sifatida saqlanadi —
+ * shunda qarz nazorati tarixi saqlanadi. Agar to'lov kassadan naqd berilgan
+ * bo'lsa (`paidFromCash`), smena uchun `cash_out` ham yoziladi.
  */
 export async function createPurchase(input: PurchaseInput): Promise<number> {
   if (input.lines.length === 0) throw new Error('Kamida bitta mahsulot qatori kiriting')
@@ -201,15 +211,31 @@ export async function createPurchase(input: PurchaseInput): Promise<number> {
     if (!(line.qty > 0)) throw new Error("Miqdor 0 dan katta bo'lishi kerak")
     if (line.costPrice < 0) throw new Error("Kirim narxi manfiy bo'lishi mumkin emas")
   }
+  if (input.paid < 0) throw new Error("To'langan summa manfiy bo'lishi mumkin emas")
+
+  const jami = input.lines.reduce((s, l) => s + l.qty * l.costPrice, 0)
+  if (input.paid > jami) throw new Error('To\'langan summa kirim summasidan ko\'p bo\'lmaydi')
+
+  // Kassadan to'lash — ochiq smena talab qilinadi
+  const paidFromCash = input.paidFromCash === true && input.paid > 0
+  if (paidFromCash) {
+    if (!input.shiftId) throw new Error("Kassadan to'lash uchun ochiq smena kerak")
+    const smena = await db.shifts.get(input.shiftId)
+    if (!smena || smena.status !== 'open') {
+      throw new Error("Smena yopilgan — kassadan to'lash mumkin emas")
+    }
+  }
 
   return db.transaction(
     'rw',
     [
       db.purchases,
       db.purchase_items,
+      db.purchase_payments,
       db.stock_movements,
       db.products,
       db.batches,
+      db.cash_events,
       db.counters,
       db.audit_log,
     ],
@@ -298,6 +324,37 @@ export async function createPurchase(input: PurchaseInput): Promise<number> {
         `Kirim qayd etildi: ${docNo} (${fmtTotal(total)})`,
         purchaseId,
       )
+
+      // ── To'lov yozuvi va (kassadan bo'lsa) naqd chiqim ──
+      if (input.paid > 0) {
+        const paid = Math.round(input.paid)
+        const shiftId = paidFromCash ? input.shiftId! : null
+
+        await db.purchase_payments.add({
+          purchaseId,
+          supplierId: input.supplierId,
+          date: input.date,
+          method: input.payMethod ?? 'cash',
+          amount: paid,
+          fromCash: paidFromCash,
+          shiftId,
+          userId: input.userId,
+          createdAt,
+        })
+
+        if (shiftId) {
+          await db.cash_events.add({
+            shiftId,
+            type: 'cash_out',
+            amount: paid,
+            reason: `Kirim to'lovi (${docNo})`,
+            userId: input.userId,
+            createdAt,
+            refType: 'purchase',
+            refId: purchaseId,
+          })
+        }
+      }
 
       return purchaseId
     },

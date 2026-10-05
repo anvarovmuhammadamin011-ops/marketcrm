@@ -26,6 +26,16 @@ import {
 } from '../src/db/repo/salesRepo'
 import { createPurchase, createSupplier, getStockMap } from '../src/db/repo/stockRepo'
 import {
+  deleteSupplier,
+  listPurchasePayments,
+  listSupplierPayments,
+  listSupplierPurchases,
+  listSupplierStats,
+  payPurchase,
+  totalDebt,
+  updateSupplier,
+} from '../src/db/repo/suppliersRepo'
+import {
   createExpense,
   createExpenseCategory,
   deleteExpense,
@@ -765,6 +775,237 @@ async function sozlamalarOqimi() {
   tekshir('zaxira: foydalanuvchilar tiklandi', (await db.users.count()) >= 2 ? 1 : 0, 1)
 }
 
+/**
+ * YETKAZIB BERUVCHILAR va QARZ NAZORATI oqimi.
+ *  — statistika (olgan / to'lagan / qarz)
+ *  — qarzli kirim, to'lov tarixi
+ *  — kassadan to'lov smena naqdimini kamaytirishi
+ *  — chegaralar: to'lov kirimdan ko'p bo'lmaydi, yopiq smenadan to'lanmaydi
+ */
+async function yetkazibBeruvchiOqimi() {
+  const admin = (await db.users.where('login').equals('admin').first())!
+  const userId = admin.id!
+  // Mahsulot yaratmaymiz (keyingi zaxira testi 7 ta mahsulot kutiladi)
+  const mahsulot = (await db.products.orderBy('id').first())!
+
+  // ── 1. Ro'yxat va statistika ──
+  const sid = await createSupplier({ nom: 'Qarz Nazorati YB', telefon: '+998 90 000 11 22' })
+  let stats = await listSupplierStats()
+  let row = stats.find((s) => s.id === sid)!
+  tekshir('yb: statistikada bor', !!row && row.debt === 0 && row.purchasesCount === 0 ? 1 : 0, 1)
+  tekshir(
+    'yb: statistika qarzi bo\'yicha kamaygan tartibda',
+    stats.every((s, i) => i === 0 || stats[i - 1].debt >= s.debt) ? 1 : 0,
+    1,
+  )
+
+  // ── 2. Qarzli kirim (to'lanmagan) ──
+  const kirimId = await createPurchase({
+    supplierId: sid,
+    date: Date.now(),
+    lines: [{ productId: mahsulot.id!, qty: 5, costPrice: 10_000 }],
+    paid: 0,
+    userId,
+  })
+  const kirim = (await db.purchases.get(kirimId))!
+  tekshir('yb: kirim jami 50 000', kirim.total === 50_000 ? 1 : 0, 1)
+  tekshir(
+    'yb: to\'lanmagan kirimda to\'lov yozuvi yo\'q',
+    (await db.purchase_payments.where('purchaseId').equals(kirimId).count()) === 0 ? 1 : 0,
+    1,
+  )
+  row = (await listSupplierStats()).find((s) => s.id === sid)!
+  tekshir('yb: statistika qarzi 50 000', row.debt === 50_000 && row.totalPaid === 0 ? 1 : 0, 1)
+  tekshir('yb: statistika olgan summasi', row.totalPurchased === 50_000 ? 1 : 0, 1)
+  tekshir('yb: mahsulot xili sanaldi', row.productsCount === 1 ? 1 : 0, 1)
+  tekshir('yb: umumiy qarz hisoblandi', (await totalDebt()).qarz >= 50_000 ? 1 : 0, 1)
+
+  // ── 3. Chegaralar: to'lov kirim summasidan ko'p bo'lmaydi ──
+  let bloklandi = false
+  try {
+    await createPurchase({
+      supplierId: sid,
+      date: Date.now(),
+      lines: [{ productId: mahsulot.id!, qty: 1, costPrice: 1000 }],
+      paid: 5000,
+      userId,
+    })
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: kirimdan ko\'p to\'lov bloklanadi', bloklandi ? 1 : 0, 1)
+
+  // ── 4. Smena ochiq emas — kassadan to'lash bloklanadi ──
+  tekshir('yb: test boshida smena yopiq', (await getOpenShift()) === null ? 1 : 0, 1)
+  bloklandi = false
+  try {
+    await payPurchase({
+      purchaseId: kirimId,
+      amount: 1000,
+      method: 'cash',
+      fromCash: true,
+      shiftId: 999_999,
+      userId,
+    })
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: smenasiz kassadan to\'lov bloklanadi', bloklandi ? 1 : 0, 1)
+
+  // ── 5. Smena ochamiz va kassadan to'laymiz ──
+  const shiftId = await openShift(300_000, userId)
+  const oldin = await calcShiftSummary(shiftId)
+  await payPurchase({
+    purchaseId: kirimId,
+    amount: 20_000,
+    method: 'cash',
+    fromCash: true,
+    shiftId,
+    userId,
+  })
+  tekshir(
+    'yb: kassadan to\'lov smena naqdimini kamaytirdi',
+    (await calcShiftSummary(shiftId)).expectedCash === oldin.expectedCash - 20_000 ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'yb: purchase_payments yozuvi saqlandi',
+    (await listPurchasePayments(kirimId)).length === 1 ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'yb: to\'langan summa yangilandi',
+    (await db.purchases.get(kirimId))!.paid === 20_000 ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'yb: cash_out kassa harakati yozildi',
+    (await db.cash_events.where('refType').equals('purchase').count()) >= 1 ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'yb: to\'lov kassadan bog\'langan',
+    (await listPurchasePayments(kirimId))[0]?.fromCash === true ? 1 : 0,
+    1,
+  )
+
+  // ── 6. Kassadan tashqaridagi to'lov (karta) kassa harakati yaratmasin ──
+  const oldin2 = await calcShiftSummary(shiftId)
+  await payPurchase({
+    purchaseId: kirimId,
+    amount: 10_000,
+    method: 'card',
+    fromCash: false,
+    userId,
+  })
+  tekshir(
+    'yb: kartali to\'lov kassani tegilmaydi',
+    (await calcShiftSummary(shiftId)).expectedCash === oldin2.expectedCash ? 1 : 0,
+    1,
+  )
+  tekshir(
+    'yb: ikkinchi to\'lov yozuvi qo\'shildi',
+    (await listPurchasePayments(kirimId)).length === 2 ? 1 : 0,
+    1,
+  )
+
+  // ── 7. Qarz chegarasidan oshish bloklanadi ──
+  bloklandi = false
+  try {
+    await payPurchase({ purchaseId: kirimId, amount: 999_999, method: 'cash', userId })
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: qarzdan ko\'p to\'lov bloklanadi', bloklandi ? 1 : 0, 1)
+  bloklandi = false
+  try {
+    await payPurchase({ purchaseId: kirimId, amount: 0, method: 'cash', userId })
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: nol to\'lov bloklanadi', bloklandi ? 1 : 0, 1)
+
+  // ── 8. Qarzni to'liq yopamiz, keyin to'lash bloklanadi ──
+  await payPurchase({ purchaseId: kirimId, amount: 20_000, method: 'cash', userId })
+  tekshir(
+    'yb: qarz to\'liq yopildi',
+    (await db.purchases.get(kirimId))!.paid === 50_000 ? 1 : 0,
+    1,
+  )
+  row = (await listSupplierStats()).find((s) => s.id === sid)!
+  tekshir('yb: statistikada qarz yo\'q', row.debt === 0 ? 1 : 0, 1)
+  bloklandi = false
+  try {
+    await payPurchase({ purchaseId: kirimId, amount: 1000, method: 'cash', userId })
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: qarzsiz kirimga to\'lov bloklanadi', bloklandi ? 1 : 0, 1)
+
+  // ── 9. Yetkazib beruvchi bo'yicha ro'yxatlar ──
+  const ybKirimlar = await listSupplierPurchases(sid)
+  tekshir('yb: yetkazib beruvchi kirimlari', ybKirimlar.length === 1 && ybKirimlar[0].debt === 0 ? 1 : 0, 1)
+  tekshir(
+    'yb: yetkazib beruvchi to\'lovlari tarixi',
+    (await listSupplierPayments(sid)).length === 3 ? 1 : 0,
+    1,
+  )
+
+  // ── 10. Yetkazib beruvchini tahrirlash (nom unikal) ──
+  await updateSupplier(sid, { nom: 'Qarz Nazorati YB (yangilangan)' }, userId)
+  tekshir(
+    'yb: tahrirlash saqlandi',
+    (await db.suppliers.get(sid))!.nom === 'Qarz Nazorati YB (yangilangan)' ? 1 : 0,
+    1,
+  )
+  bloklandi = false
+  try {
+    await updateSupplier(sid, { nom: 'Test Yetkazib Beruvchi' }, userId)
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: takroriy nom bloklanadi', bloklandi ? 1 : 0, 1)
+
+  // ── 11. Kirimi bor yetkazib beruvchini o'chirib bo'lmaydi ──
+  bloklandi = false
+  try {
+    await deleteSupplier(sid, userId)
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: kirimi bor YB o\'chirilmaydi', bloklandi ? 1 : 0, 1)
+
+  // ── 12. Bo'sh yetkazib beruvchini o'chirish mumkin ──
+  const boshid = await createSupplier({ nom: 'O\'chiriladigan YB' })
+  await deleteSupplier(boshid, userId)
+  tekshir('yb: bo\'sh YB o\'chiriladi', (await db.suppliers.get(boshid)) === undefined ? 1 : 0, 1)
+
+  // ── 13. Yopiq smenadan kassadan to'lov bloklanadi ──
+  const yopiqSmenali = await createSupplier({ nom: 'Yopiq Smena YB' })
+  const kirim2 = await createPurchase({
+    supplierId: yopiqSmenali,
+    date: Date.now(),
+    lines: [{ productId: mahsulot.id!, qty: 1, costPrice: 5_000 }],
+    paid: 0,
+    userId,
+  })
+  await closeShift((await calcShiftSummary(shiftId)).expectedCash, userId)
+  bloklandi = false
+  try {
+    await payPurchase({
+      purchaseId: kirim2,
+      amount: 1000,
+      method: 'cash',
+      fromCash: true,
+      shiftId,
+      userId,
+    })
+  } catch {
+    bloklandi = true
+  }
+  tekshir('yb: yopiq smenadan to\'lov bloklanadi', bloklandi ? 1 : 0, 1)
+}
+
 async function asosiy() {
   // ── 1. Baza ochiladi va seed ishlaydi ──
   await runSeed()
@@ -810,7 +1051,10 @@ async function asosiy() {
   // ── 9. Foydalanuvchilar va ruxsatlar ──
   await foydalanuvchiOqimi()
 
-  // ── 10. Sozlamalar va zaxira nusxa ──
+  // ── 10. Yetkazib beruvchilar va qarz nazorati ──
+  await yetkazibBeruvchiOqimi()
+
+  // ── 11. Sozlamalar va zaxira nusxa ──
   await sozlamalarOqimi()
 
   // ── Natija ──

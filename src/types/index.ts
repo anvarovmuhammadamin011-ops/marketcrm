@@ -284,6 +284,23 @@ export interface User {
   createdAt: number
 }
 
+/** Yetkazib beruvchiga to'lov (kirim qarzini yopish) */
+export interface PurchasePayment {
+  id?: number
+  purchaseId: number
+  supplierId: number
+  date: number
+  method: 'cash' | 'card'
+  amount: number
+  /** Naqd kassadan berilganmi (smena bilan bog'liq) */
+  fromCash: boolean
+  /** fromCash = true bo'lsa, qaysi smenadan chiqarilgan */
+  shiftId?: number | null
+  userId: number
+  createdAt: number
+  note?: string
+}
+
 /** Audit jurnali — kim qachon nima qilgani */
 export interface AuditLog {
   id?: number

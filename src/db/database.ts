@@ -14,6 +14,7 @@ import type {
   ProductLink,
   Purchase,
   PurchaseItem,
+  PurchasePayment,
   Sale,
   SaleItem,
   SalePayment,
@@ -53,6 +54,8 @@ export class DokonDB extends Dexie {
   stock_movements!: Table<StockMovement, number>
   purchases!: Table<Purchase, number>
   purchase_items!: Table<PurchaseItem, number>
+  /** Yetkazib beruvchiga to'lovlar (qarz yopilish tarixi) — v2 dan boshlab */
+  purchase_payments!: Table<PurchasePayment, number>
   inventories!: Table<Inventory, number>
   inventory_items!: Table<InventoryItem, number>
   writeoffs!: Table<Writeoff, number>
@@ -119,6 +122,15 @@ export class DokonDB extends Dexie {
       audit_log: '++id, userId, createdAt, entityType, action, [userId+createdAt]',
       settings: '++id, &key',
       counters: '++id, &key',
+    })
+
+    /**
+     * v2 — yetkazib beruvchiga qarz nazorati.
+     * `purchase_payments` — kirimlarni to'lash tarixi (kim, qachon, qancha).
+     * Eski versiyalar uchun hech narsani o'zgartirmaydi (faqat yangi jadval qo'shiladi).
+     */
+    this.version(2).stores({
+      purchase_payments: '++id, purchaseId, supplierId, date, method, userId, shiftId',
     })
   }
 }

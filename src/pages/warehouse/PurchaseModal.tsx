@@ -3,7 +3,9 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { ErrorBox } from '../../components/ui/Modal'
 import { fmtMoney, fmtQty, fromDateInput, toDateInput } from '../../db/repo/helpers'
 import { listProducts, type ProductRow } from '../../db/repo/productsRepo'
+import { getOpenShift } from '../../db/repo/salesRepo'
 import { createPurchase, createSupplier, listSuppliers } from '../../db/repo/stockRepo'
+import type { Shift } from '../../types'
 
 interface Props {
   open: boolean
@@ -26,12 +28,19 @@ let lineKey = 1
 export default function PurchaseModal({ open, userId, onClose }: Props) {
   const products = useLiveQuery(() => listProducts(), [open], [] as ProductRow[])
   const suppliers = useLiveQuery(() => listSuppliers(), [open], [])
+  const shift = useLiveQuery<Shift | null, Shift | null>(
+    () => (open ? getOpenShift() : Promise.resolve(null)),
+    [open],
+    null,
+  )
 
   const [supplierId, setSupplierId] = useState(0)
   const [newSupplier, setNewSupplier] = useState('')
   const [showNewSupplier, setShowNewSupplier] = useState(false)
   const [date, setDate] = useState(toDateInput(Date.now()))
   const [paid, setPaid] = useState('')
+  const [payMethod, setPayMethod] = useState<'cash' | 'card'>('cash')
+  const [paidFromCash, setPaidFromCash] = useState(true)
   const [note, setNote] = useState('')
   const [lines, setLines] = useState<Line[]>([])
   const [error, setError] = useState('')
@@ -46,6 +55,8 @@ export default function PurchaseModal({ open, userId, onClose }: Props) {
     setNewSupplier('')
     setDate(toDateInput(Date.now()))
     setPaid('')
+    setPayMethod('cash')
+    setPaidFromCash(true)
     setNote('')
     setLines([
       { key: lineKey++, productId: 0, qty: '', costPrice: '', expiry: '' },
@@ -115,6 +126,9 @@ export default function PurchaseModal({ open, userId, onClose }: Props) {
         date: fromDateInput(date),
         lines: payload,
         paid: Number(paid) || 0,
+        payMethod,
+        paidFromCash: payMethod === 'cash' && paidFromCash,
+        shiftId: shift?.id ?? null,
         userId,
         note: note.trim() || undefined,
       })
@@ -299,10 +313,65 @@ export default function PurchaseModal({ open, userId, onClose }: Props) {
               className="fld"
               type="number"
               min="0"
+              max={Math.floor(total)}
               value={paid}
               onChange={(e) => setPaid(e.target.value)}
               placeholder="0"
             />
+            {(Number(paid) || 0) > total && (
+              <p className="mt-1 text-xs text-rose-600">Kirim summasidan ko'p to'lab bo'lmaydi</p>
+            )}
+            <div className="mt-2 flex gap-1.5">
+              {(
+                [
+                  ['cash', 'Naqd'],
+                  ['card', 'Karta'],
+                ] as Array<['cash' | 'card', string]>
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setPayMethod(key)}
+                  className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+                    payMethod === key
+                      ? 'border-teal-600 bg-teal-50 text-teal-700'
+                      : 'border-slate-300 text-slate-500 hover:bg-slate-50'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setPaid(String(Math.floor(qarz)))}
+                className="rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-500 hover:bg-slate-50"
+              >
+                Qarzni to'ldirmaslik
+              </button>
+            </div>
+            {payMethod === 'cash' && Number(paid) > 0 && (
+              <label className="mt-2 flex items-start gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={paidFromCash}
+                  onChange={(e) => setPaidFromCash(e.target.checked)}
+                />
+                <span>
+                  Kassadan naqd berilmoqda (smenadan chiqadi)
+                  {!shift && (
+                    <span className="mt-0.5 block text-rose-600">
+                      Ochiq smena yo'q — belgilanmasa to'lov kassadan tashqarida hisoblanadi
+                    </span>
+                  )}
+                  {shift && (
+                    <span className="mt-0.5 block text-slate-400">
+                      Ochiq smena · #{shift.id} · {fmtMoney(shift.openingCash)} so'm boshlang'ich naqd
+                    </span>
+                  )}
+                </span>
+              </label>
+            )}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-600">Izoh</label>
