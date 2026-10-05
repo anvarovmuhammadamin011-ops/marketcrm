@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useMemo, useState } from 'react'
 import Modal from '../../components/ui/Modal'
+import { PurchasePrintButton } from '../../components/ui/PrintReceiptButton'
 import { db } from '../../db/database'
 import { downloadCsv } from '../../db/repo/export'
 import { fmtDateTime, fmtMoney, fmtQty, fromDateInput, toDateInput } from '../../db/repo/helpers'
@@ -206,6 +207,7 @@ export default function PurchasesPage({ userId }: Props) {
                     <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => setDetail(p)}>
                       Tafsilot
                     </button>
+                    <PurchasePrintButton purchaseId={p.id!} variant="ghost" label="Chop etish" />
                   </div>
                 </td>
               </tr>
@@ -310,6 +312,13 @@ function PurchaseDetail({ purchase, onClose }: { purchase: Purchase | null; onCl
           )}
         </>
       )}
+
+      <div className="mt-4 flex justify-end gap-2">
+        <button className="btn-ghost" onClick={onClose}>
+          Yopish
+        </button>
+        {purchase && <PurchasePrintButton purchaseId={purchase.id!} variant="ghost" />}
+      </div>
     </Modal>
   )
 }

@@ -76,6 +76,8 @@ import {
 } from '../src/db/repo/settingsRepo'
 import { verifyPassword } from '../src/db/crypto'
 import { login } from '../src/hooks/useAuth'
+import { purchaseReceiptHtml, saleReceiptHtml, shopFromSettings } from '../src/db/repo/receipt'
+import { fmtMoney } from '../src/db/repo/helpers'
 
 const natijalar: Array<{ jadval: string; bor: number; kutilgan: number }> = []
 
@@ -1006,6 +1008,160 @@ async function yetkazibBeruvchiOqimi() {
   tekshir('yb: yopiq smenadan to\'lov bloklanadi', bloklandi ? 1 : 0, 1)
 }
 
+/**
+ * CHEK CHOP ETISH — HTML generator to'gri chiqadimi.
+ * (Chop etish brauzerda ishlaydi, shuning uchun matn sinovi yetarli.)
+ */
+async function chekOqimi() {
+  const admin = (await db.users.where('login').equals('admin').first())!
+  const mahsulot = (await db.products.orderBy('id').first())!
+
+  // ── Sotuv cheki ──
+  const savdo = await commitSale({
+    lines: [{ productId: mahsulot.id!, qty: 2, unitPrice: 5000 }],
+    discount: 1000,
+    payments: [{ method: 'cash', amount: 9000, change: 1000 }],
+    userId: admin.id!,
+    shiftId: await currentOrNewShift(admin.id!),
+  })
+  const chek = saleReceiptHtml({
+    sale: {
+      id: savdo.saleId,
+      no: savdo.no,
+      datetime: savdo.datetime,
+      userId: admin.id!,
+      shiftId: 1,
+      subtotal: 10_000,
+      discount: 1000,
+      total: 9000,
+      costTotal: 4000,
+      status: 'completed',
+    },
+    items: [
+      {
+        id: 1,
+        saleId: savdo.saleId,
+        productId: mahsulot.id!,
+        qty: 2,
+        unitPrice: 5000,
+        costPrice: 4000,
+        discount: 0,
+        lineTotal: 10_000,
+        productNom: mahsulot.nom,
+      },
+    ],
+    payments: [{ saleId: savdo.saleId, method: 'cash', amount: 9000, change: 1000 }],
+    cashier: 'Admin',
+    shop: { shop_name: "Test do'kon", address: 'Toshkent', phone: '+998 90 000 00 00' },
+  })
+
+  tekshir('chek: to\'liq HTML hujjat', chek.startsWith('<!doctype html>') && chek.includes('</html>') ? 1 : 0, 1)
+  tekshir('chek: do\'kon nomi chiqdi', chek.includes("Test do'kon") ? 1 : 0, 1)
+  tekshir('chek: manzil va telefon', chek.includes('Toshkent') && chek.includes('+998 90 000 00 00') ? 1 : 0, 1)
+  tekshir('chek: chek raqami chiqdi', chek.includes(savdo.no) ? 1 : 0, 1)
+  tekshir('chek: mahsulot nomi chiqdi', chek.includes(mahsulot.nom) ? 1 : 0, 1)
+  tekshir('chek: qator summasi 10 000', chek.includes(fmtMoney(10_000)) ? 1 : 0, 1)
+  tekshir('chek: chegirma ko\'rsatildi', chek.includes('Chegirma') ? 1 : 0, 1)
+  tekshir('chek: to\'lovsummasi 9 000', chek.includes(fmtMoney(9000)) ? 1 : 0, 1)
+  tekshir('chek: qaytim ko\'rsatildi', chek.includes('Qaytim') ? 1 : 0, 1)
+  tekshir('chek: tor o\'lcham (80 mm)', chek.includes('width: 76mm') ? 1 : 0, 1)
+  tekshir('chek: bekor belgisi yo\'q', !chek.includes('BEKOR QILINGAN') ? 1 : 0, 1)
+
+  // Bekor qilingan chek — maxsus belgi bilan
+  await cancelSale(savdo.saleId, admin.id!, 'void')
+  const bekorChek = saleReceiptHtml({
+    sale: {
+      id: savdo.saleId,
+      no: savdo.no,
+      datetime: savdo.datetime,
+      userId: admin.id!,
+      shiftId: 1,
+      subtotal: 10_000,
+      discount: 1000,
+      total: 9000,
+      costTotal: 4000,
+      status: 'void',
+    },
+    items: [],
+    payments: [],
+    cashier: 'Admin',
+  })
+  tekshir('chek: bekor qilinganlik belgisi', bekorChek.includes('BEKOR QILINGAN') ? 1 : 0, 1)
+  tekshir('chek: bekor sarlavhasi', bekorChek.includes('CHEK (BEKOR QILINGAN)') ? 1 : 0, 1)
+
+  // ── Xavfsizlik: mahsulot nomidagi HTML neytral bo'lishi kerak ──
+  const xavfsiz = saleReceiptHtml({
+    sale: {
+      id: 1,
+      no: '000001',
+      datetime: Date.now(),
+      userId: admin.id!,
+      shiftId: 1,
+      subtotal: 100,
+      discount: 0,
+      total: 100,
+      costTotal: 50,
+      status: 'completed',
+    },
+    items: [
+      {
+        id: 1,
+        saleId: 1,
+        productId: 1,
+        qty: 1,
+        unitPrice: 100,
+        costPrice: 50,
+        discount: 0,
+        lineTotal: 100,
+        productNom: '<script>alert(1)</script>',
+      },
+    ],
+    payments: [{ saleId: 1, method: 'cash', amount: 100 }],
+    cashier: '<b>Admin</b>',
+  })
+  tekshir('chek: HTML injeksiyasi bloklanadi', !xavfsiz.includes('<script>alert') ? 1 : 0, 1)
+  tekshir('chek: kassir nomi ham escape qilinadi', !xavfsiz.includes('<b>Admin</b>') ? 1 : 0, 1)
+
+  // ── Kirim hujjati ──
+  const sid = await createSupplier({ nom: 'Chek Yetkazib Beruvchi' })
+  const kirimId = await createPurchase({
+    supplierId: sid,
+    date: Date.now(),
+    lines: [{ productId: mahsulot.id!, qty: 3, costPrice: 4000 }],
+    paid: 5000,
+    userId: admin.id!,
+  })
+  const kirim = (await db.purchases.get(kirimId))!
+  const kirimItems = await db.purchase_items.where('purchaseId').equals(kirimId).toArray()
+  const hujjat = purchaseReceiptHtml({
+    purchase: kirim,
+    items: kirimItems.map((i) => ({ ...i, productNom: mahsulot.nom })),
+    payments: await listPurchasePayments(kirimId),
+    supplierNom: 'Chek Yetkazib Beruvchi',
+    shop: { shop_name: "Test do'kon" },
+  })
+  tekshir('chek: kirim hujjati HTML', hujjat.startsWith('<!doctype html>') ? 1 : 0, 1)
+  tekshir('chek: kirim yetkazib beruvchi', hujjat.includes('Chek Yetkazib Beruvchi') ? 1 : 0, 1)
+  tekshir('chek: kirim qarzi 7 000', hujjat.includes(fmtMoney(7000)) ? 1 : 0, 1)
+  tekshir('chek: kirim to\'lovi 5 000', hujjat.includes(fmtMoney(5000)) ? 1 : 0, 1)
+
+  // ── Sozlamadan do'kon ma'lumotlari ──
+  await setSettings({ shop_name: "Chek Do'kon", address: 'Andijon', phone: '+998 90 111 22 33' })
+  const shop = shopFromSettings(await db.settings.toArray())
+  tekshir(
+    'chek: sozlamalar chekka o\'tkazildi',
+    shop.shop_name === "Chek Do'kon" && shop.address === 'Andijon' ? 1 : 0,
+    1,
+  )
+}
+
+/** Ochiq smena id'si (yo'q bo'lsa ochadi) */
+async function currentOrNewShift(userId: number): Promise<number> {
+  const ochiq = await getOpenShift()
+  if (ochiq?.id) return ochiq.id
+  return openShift(500_000, userId)
+}
+
 async function asosiy() {
   // ── 1. Baza ochiladi va seed ishlaydi ──
   await runSeed()
@@ -1054,7 +1210,10 @@ async function asosiy() {
   // ── 10. Yetkazib beruvchilar va qarz nazorati ──
   await yetkazibBeruvchiOqimi()
 
-  // ── 11. Sozlamalar va zaxira nusxa ──
+  // ── 11. Chek chop etish ──
+  await chekOqimi()
+
+  // ── 12. Sozlamalar va zaxira nusxa ──
   await sozlamalarOqimi()
 
   // ── Natija ──

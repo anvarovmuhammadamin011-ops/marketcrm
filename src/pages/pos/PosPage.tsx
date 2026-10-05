@@ -9,6 +9,7 @@ import {
 import { commitSale, type CartLine, type SaleResult } from '../../db/repo/salesRepo'
 import { useBarcodeScanner } from '../../hooks/useBarcodeScanner'
 import { useCurrentUser } from '../../hooks/useAuth'
+import { SalePrintButton } from '../../components/ui/PrintReceiptButton'
 import type { Product } from '../../types'
 
 interface CartItem {
@@ -589,6 +590,16 @@ function SaleDone({
         <button onClick={onNew} className="btn-primary mt-6 w-full py-3">
           Yangi savdo
         </button>
+
+        <SalePrintButton
+          saleId={result.saleId}
+          variant="ghost"
+          label="Chekni chop etish"
+        />
+
+        <p className="mt-4 text-xs text-slate-400">
+          Yangi savdo uchun <kbd className="rounded bg-slate-100 px-1.5 py-0.5">Enter</kbd> bosing
+        </p>
       </div>
     </div>
   )

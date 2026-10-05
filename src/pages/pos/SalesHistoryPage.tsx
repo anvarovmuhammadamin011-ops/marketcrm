@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useMemo, useState } from 'react'
 import Modal from '../../components/ui/Modal'
+import { SalePrintButton } from '../../components/ui/PrintReceiptButton'
 import { fmtDateTime, fmtMoney } from '../../db/repo/helpers'
 import {
   cancelSale,
@@ -300,10 +301,11 @@ function SaleDetail({
         </div>
       </div>
 
-      <div className="mt-4 flex justify-end gap-2">
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button className="btn-ghost" onClick={onClose}>
           Yopish
         </button>
+        <SalePrintButton saleId={sale.id!} cashier={sale.kassirNom} variant="ghost" />
         {canAct && (
           <>
             <button
